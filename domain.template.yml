@@ -1,0 +1,216 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Description: Configure a Route53 hosting zone routing traffic on the internet for a given domain name.
+
+Parameters:
+
+  DomainName:
+    Description: The fully qualified domain name to configure on Route53.
+    Type: String
+    AllowedPattern: ^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9][a-z0-9-]{0,61}[a-z0-9]\.{0,1}$
+    ConstraintDescription: You must specify a fully qualified domain name, for example, www.example.com. The trailing
+                           dot is optional; Amazon Route 53 assumes that the domain name is fully qualified. This means
+                           that Route 53 treats www.example.com (without a trailing dot) and www.example.com. (with a
+                           trailing dot) as identical.
+
+  TagApplication:
+    Description: A unique, friendly name used to identify resources deployed by this stack.
+    Type: String
+    Default: domain
+    AllowedPattern: ^[0-9a-zA-Z-]+$
+    ConstraintDescription: The 'Application' tag must only contain uppercase and lowercase letters or numbers. Dashes
+                           ('-') should only be used when prepending a nested CloudFormation stack tag with its
+                           parents.
+
+  TagEnvironment:
+    Description: An environment name that will be tagged to all deployed resources.
+    Type: String
+    AllowedValues:
+    - dev
+    - prod
+    ConstraintDescription: You must specify either 'dev' or 'prod'.
+
+Resources:
+
+  QueryLoggingLogGroupStackSet:
+    Type: AWS::CloudFormation::StackSet
+    Properties:
+      Description:
+        Fn::Sub: Configure a CloudWatch log group Route53 supporting query logging configuration for the
+                 '${DomainName}' domain.
+      Parameters:
+      - ParameterKey: TagApplication
+        ParameterValue:
+          Ref: TagApplication
+      - ParameterKey: TagEnvironment
+        ParameterValue:
+          Ref: TagEnvironment
+      PermissionModel: SELF_MANAGED
+      StackInstancesGroup:
+      - DeploymentTargets:
+          Accounts:
+          - Ref: AWS::AccountId
+        Regions:
+        - us-east-1
+      StackSetName:
+        Fn::Join:
+        - "-"
+        - - Ref: TagApplication
+          - query-logging-log-group
+          - Fn::Join:
+            - "-"
+            - Fn::Split:
+              - .
+              - Ref: DomainName
+      TemplateBody:
+        Fn::Sub: |
+          AWSTemplateFormatVersion: 2010-09-09
+          Description: Configure a CloudWatch log group Route53 supporting query logging configuration for the
+                       '${DomainName}' domain.
+          Parameters:
+            TagApplication:
+              Description: A unique friendly name, used to identify resources deployed by this stack.
+              Type: String
+              Default: domains
+              AllowedPattern: ^[0-9a-zA-Z-]+$
+              ConstraintDescription: The 'Application' tag must only contain uppercased, lowercased letters or number.
+                                     Dashes ('-') should only be used to when prepending an nested CloudFormation stack
+                                     tag with its parents.
+            TagEnvironment:
+              Description: An environment name that will be tagged to all deployed resources.
+              Type: String
+              AllowedValues:
+              - dev
+              - prod
+              ConstraintDescription: You must specify either 'dev' or 'prod'.
+          Resources:
+            LogGroup:
+              Type: AWS::Logs::LogGroup
+              Properties:
+                LogGroupName: /aws/route53/${DomainName}
+                RetentionInDays: 30
+                Tags:
+                - Key: custom:application
+                  Value:
+                    Ref: TagApplication
+                - Key: custom:environment
+                  Value:
+                    Ref: TagEnvironment
+                - Key: custom:stackName
+                  Value:
+                    Ref: AWS::StackName
+                - Key: custom:stackOwner
+                  Value:
+                    Ref: AWS::AccountId
+
+#######################################################################################################################
+# \/                                        Domain hosted zone configuration                                       \/ #
+#######################################################################################################################
+
+  HostedZone:
+    Type: AWS::Route53::HostedZone
+    DependsOn:
+    - QueryLoggingLogGroupStackSet
+    Properties:
+      HostedZoneConfig:
+        Comment:
+          Fn::Sub: A public hosted zone routing traffic on the internet for domain '${DomainName}'.
+      HostedZoneTags:
+      - Key: custom:stackName
+        Value:
+          Ref: AWS::StackName
+      - Key: custom:environment
+        Value:
+          Ref: TagEnvironment
+      - Key: custom:application
+        Value:
+          Ref: TagApplication
+      Name:
+        Ref: DomainName
+      # QueryLogging require a log group to be deployed in us-east-1.
+      # @see https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-route53-hostedzone.html
+      QueryLoggingConfig:
+        CloudWatchLogsLogGroupArn:
+          Fn::Join:
+          - ":"
+          - - arn
+            - Ref: AWS::Partition
+            - logs
+            - us-east-1
+            - Ref: AWS::AccountId
+            - log-group
+            - Fn::Sub: /aws/route53/${DomainName}
+            - "*"
+
+#######################################################################################################################
+# \/                                        Domain hosted zone configuration                                       \/ #
+#######################################################################################################################
+
+  CfnExportsStackSet:
+    Type: AWS::CloudFormation::StackSet
+    Properties:
+      Description: Configure cross-region CloudFormation exports of Route53 variables.
+      PermissionModel: SELF_MANAGED
+      StackInstancesGroup:
+      - DeploymentTargets:
+          Accounts:
+          - Ref: AWS::AccountId
+        Regions:
+        - Ref: AWS::Region
+        - us-east-1  # Used by CloudFront.
+        - eu-central-1  # Other active region of this AWS account.
+      StackSetName:
+        Fn::Join:
+        - "-"
+        - - Ref: TagApplication
+          - cfn-exports
+          - Fn::Join:
+            - "-"
+            - Fn::Split:
+              - .
+              - Ref: DomainName
+      TemplateBody:
+        Fn::Sub: |
+          AWSTemplateFormatVersion: 2010-09-09
+          Description: Configure cross-region CloudFormation exports of Route53 variables for domain '${DomainName}'.
+          Outputs:
+            DomainName:
+              Description: The domain name.
+              Value: "${DomainName}"
+              Export:
+                Name:
+                  Fn::Join:
+                  - ":"
+                  - - "${AWS::AccountId}"
+                    - Ref: AWS::Region
+                    - "${TagApplication}"
+                    - Fn::Join:
+                      - "-"
+                      - - Fn::Join:
+                          - "-"
+                          - Fn::Split:
+                            - .
+                            - "${DomainName}"
+                        - domain-name
+            HostedZoneId:
+              Description: The ID that Amazon Route 53 assigned to the hosted zone routing traffic on the internet for
+                           the '${DomainName}' domain.
+              Value: "${HostedZone.Id}"
+              Export:
+                Name:
+                  Fn::Join:
+                  - ":"
+                  - - "${AWS::AccountId}"
+                    - Ref: AWS::Region
+                    - "${TagApplication}"
+                    - Fn::Join:
+                      - "-"
+                      - - Fn::Join:
+                          - "-"
+                          - Fn::Split:
+                            - .
+                            - "${DomainName}"
+                        - hosted-zone-id
+          Resources:
+            NullResource:
+              Type: AWS::CloudFormation::WaitConditionHandle

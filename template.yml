@@ -1,0 +1,164 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Description: Configure Route53 hosting zones routing traffic on the internet for custom domains registered in this
+             account.
+
+Parameters:
+
+  TagApplication:
+    Description: A unique, friendly name used to identify resources deployed by this stack.
+    Type: String
+    Default: domains
+    AllowedPattern: ^[0-9a-zA-Z-]+$
+    ConstraintDescription: The 'Application' tag must only contain uppercase and lowercase letters or numbers. Dashes
+                           ('-') should only be used when prepending a nested CloudFormation stack tag with its
+                           parents.
+
+  TagEnvironment:
+    Description: An environment name that will be tagged to all deployed resources.
+    Type: String
+    AllowedValues:
+    - dev
+    - prod
+    ConstraintDescription: You must specify either 'dev' or 'prod'.
+
+Resources:
+
+#######################################################################################################################
+# \/                                      Route53 query logging configuration                                      \/ #
+#######################################################################################################################
+
+  QueryLoggingPolicyStackSet:
+    Type: AWS::CloudFormation::StackSet
+    Properties:
+      Description: Configure a CloudWatch resource policy granting Route53 the permission to put logs to log groups
+                   supporting query logging configuration for Route53 hosted zones in 'us-east-1'.
+      PermissionModel: SELF_MANAGED
+      StackInstancesGroup:
+      - DeploymentTargets:
+          Accounts:
+          - Ref: AWS::AccountId
+        Regions:
+        - us-east-1
+      StackSetName:
+        Fn::Join:
+        - "-"
+        - - Ref: TagApplication
+          - query-logging-policy
+      TemplateBody: |
+        AWSTemplateFormatVersion: 2010-09-09
+        Description: Configure a CloudWatch resource policy granting Route53 the permission to put logs to log groups
+                     supporting query logging configuration for Route53 hosted zones.
+        Resources:
+          Route53QueryLoggingResourcePolicy:
+            Type: AWS::Logs::ResourcePolicy
+            Properties:
+              PolicyDocument:
+                Fn::Sub: |
+                  {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                      {
+                        "Sid": "Route53LogsToCloudWatchLogs",
+                        "Effect": "Allow",
+                        "Principal": {
+                          "Service": [
+                            "route53.amazonaws.com"
+                          ]
+                        },
+                        "Action": [
+                          "logs:*"
+                        ],
+                        "Resource": [
+                          "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/route53/*"
+                        ]
+                      }
+                    ]
+                  }
+              PolicyName:
+                Fn::Join:
+                - "-"
+                - - "${TagApplication}"
+                  - route53_query_logging_policy
+
+#######################################################################################################################
+# \/                                       Domain hosted zones configuration                                       \/ #
+#######################################################################################################################
+
+  AfacquEsStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn:
+    - QueryLoggingPolicyStackSet
+    Properties:
+      TemplateURL: ./domain.template.yml
+      Parameters:
+        DomainName: afacqu.es
+        TagApplication:
+          Ref: TagApplication
+        TagEnvironment:
+          Ref: TagEnvironment
+      Tags:
+      - Key: custom:application
+        Value:
+          Ref: TagApplication
+      - Key: custom:environment
+        Value:
+          Ref: TagEnvironment
+      - Key: custom:stackName
+        Value:
+          Ref: AWS::StackName
+      - Key: custom:stackOwner
+        Value:
+          Ref: AWS::AccountId
+
+  AlexisFacquesComStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn:
+    - QueryLoggingPolicyStackSet
+    Properties:
+      TemplateURL: ./domain.template.yml
+      Parameters:
+        DomainName: alexisfacques.com
+        TagApplication:
+          Ref: TagApplication
+        TagEnvironment:
+          Ref: TagEnvironment
+      Tags:
+      - Key: custom:application
+        Value:
+          Ref: TagApplication
+      - Key: custom:environment
+        Value:
+          Ref: TagEnvironment
+      - Key: custom:stackName
+        Value:
+          Ref: AWS::StackName
+      - Key: custom:stackOwner
+        Value:
+          Ref: AWS::AccountId
+
+  MidfieldrIoStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn:
+    - QueryLoggingPolicyStackSet
+    Properties:
+      TemplateURL: ./domain.template.yml
+      Parameters:
+        DomainName: midfieldr.io
+        TagApplication:
+          Ref: TagApplication
+        TagEnvironment:
+          Ref: TagEnvironment
+      Tags:
+      - Key: custom:application
+        Value:
+          Ref: TagApplication
+      - Key: custom:environment
+        Value:
+          Ref: TagEnvironment
+      - Key: custom:stackName
+        Value:
+          Ref: AWS::StackName
+      - Key: custom:stackOwner
+        Value:
+          Ref: AWS::AccountId
